@@ -432,7 +432,7 @@
       }
     }
 
-    // --- tilt from gravity (works face-up or face-down; X axis responds) ---
+    // --- tilt from gravity vs. calibrated reference (robust in any orientation) ---
     if (e.accelerationIncludingGravity && e.accelerationIncludingGravity.x != null) {
       const g = e.accelerationIncludingGravity;
       if (!gravity) gravity = { x: g.x, y: g.y, z: g.z };
@@ -440,10 +440,9 @@
       gravity.x = k * gravity.x + (1 - k) * g.x;
       gravity.y = k * gravity.y + (1 - k) * g.y;
       gravity.z = k * gravity.z + (1 - k) * g.z;
-      const [tx, ty] = tiltFromGravity(gravity.x, gravity.y, gravity.z);
       usingMotionTilt = true;
       state.haveOrientation = true;
-      applyTilt(tx, ty);
+      updateMotionTilt();
     }
   }
 
@@ -457,33 +456,47 @@
   }
 
   // ---------- Tilt sensing ----------
-  // Tilt is derived from the GRAVITY vector (via devicemotion), not the Euler
-  // angles from deviceorientation. Euler gamma (left/right) becomes unreliable
-  // when the phone is face-down, which is exactly how this app is held — that is
-  // why the X axis "didn't work". Gravity components are well-defined in any
-  // orientation, and because a flat phone reads ~0 on both X and Y whether it is
-  // face-up or face-down, calibrating face-up and then flipping face-down keeps
-  // the same center. deviceorientation is only used as a fallback.
+  // Tilt is measured as the deviation of the GRAVITY vector from a calibrated
+  // reference pose, decomposed onto the device's left/right (X) and front/back
+  // (Y) axes projected into the plane of that pose. This is robust to holding
+  // the phone face-up, face-down, or upside-down: whichever pose you calibrate
+  // becomes the neutral center, and both axes respond symmetrically around it.
+  // (The old global roll/pitch could lose the X axis in certain orientations.)
   let gravity = null;              // low-pass filtered gravity vector
   let usingMotionTilt = false;     // true once devicemotion drives the tilt
-  let rawTX = 0, rawTY = 0;        // current raw tilt (deg) before calibration
-  let centerTX = null, centerTY = null; // calibration offsets (session only)
+  let gRef = null;                 // calibrated reference gravity (unit vector)
+  let exRef = null, eyRef = null;  // in-plane basis (device X / Y) at calibration
+  let needsRef = true;             // (re)capture the reference on the next sample
+  // fallback (deviceorientation only) calibration
+  let fbCenterB = null, fbCenterG = null;
 
-  function applyTilt(rawX, rawY) {
-    rawTX = rawX;
-    rawTY = rawY;
-    if (centerTX === null) { centerTX = rawX; centerTY = rawY; }
-    state.tiltX = rawX - centerTX;
-    state.tiltY = rawY - centerTY;
-    updateFrequency(false);
+  function unit(v) {
+    const m = Math.hypot(v[0], v[1], v[2]) || 1;
+    return [v[0] / m, v[1] / m, v[2] / m];
+  }
+  function projPerp(v, g) {
+    const d = v[0] * g[0] + v[1] * g[1] + v[2] * g[2];
+    return unit([v[0] - d * g[0], v[1] - d * g[1], v[2] - d * g[2]]);
   }
 
-  // Gravity -> roll (X, left/right) and pitch (Y, front/back), in degrees.
-  function tiltFromGravity(gx, gy, gz) {
+  function setReferenceFrame() {
+    if (!gravity) return;
+    gRef = unit([gravity.x, gravity.y, gravity.z]);
+    exRef = projPerp([1, 0, 0], gRef); // device X (left/right)
+    eyRef = projPerp([0, 1, 0], gRef); // device Y (front/back)
+    needsRef = false;
+  }
+
+  function updateMotionTilt() {
+    if (needsRef || !gRef) setReferenceFrame();
+    if (!gRef) return;
+    const g = unit([gravity.x, gravity.y, gravity.z]);
     const rad = 180 / Math.PI;
-    const tx = Math.atan2(gx, Math.hypot(gy, gz)) * rad; // left/right
-    const ty = Math.atan2(gy, Math.hypot(gx, gz)) * rad; // front/back
-    return [tx, ty];
+    const cx = Math.max(-1, Math.min(1, g[0] * exRef[0] + g[1] * exRef[1] + g[2] * exRef[2]));
+    const cy = Math.max(-1, Math.min(1, g[0] * eyRef[0] + g[1] * eyRef[1] + g[2] * eyRef[2]));
+    state.tiltX = Math.asin(cx) * rad;
+    state.tiltY = Math.asin(cy) * rad;
+    updateFrequency(false);
   }
 
   // Fallback only (used when devicemotion gravity is unavailable).
@@ -491,13 +504,21 @@
     if (usingMotionTilt) return;
     if (e.beta === null || e.gamma === null) return;
     state.haveOrientation = true;
-    applyTilt(e.gamma, e.beta);
+    if (fbCenterB === null) { fbCenterB = e.beta; fbCenterG = e.gamma; }
+    let dB = e.beta - fbCenterB, dG = e.gamma - fbCenterG;
+    if (dB > 180) dB -= 360;
+    if (dB < -180) dB += 360;
+    state.tiltX = dG;
+    state.tiltY = dB;
+    updateFrequency(false);
   }
 
   function calibrate() {
-    // Make the current posture the neutral center.
-    centerTX = rawTX;
-    centerTY = rawTY;
+    // Make the current posture the neutral center (works in any orientation).
+    needsRef = true;
+    if (gravity) setReferenceFrame();
+    fbCenterB = null;
+    fbCenterG = null;
     state.tiltX = 0;
     state.tiltY = 0;
     updatePadDot();
