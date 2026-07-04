@@ -393,9 +393,10 @@
   let prevTiltX = null, prevTiltY = null;
   let angSpeedEMA = 0;          // smoothed per-sample tilt change (for pickup)
   let stillRefX = 0, stillRefY = 0; // tilt anchor for the stillness window
-  const STILL_ANGLE = 1.0;      // deg; drift below this over the window = set down
+  const STILL_ANGLE = 0.7;      // deg; drift below this over the window = still
   const START_SPEED = 0.4;      // deg/sample (smoothed) to auto-start on pickup
-  const HOLD_STILL_MS = 1400;   // must be still this long before auto-stopping
+  const HOLD_STILL_MS = 1200;   // must be flat & still this long before auto-stopping
+  const FLAT_COS = Math.cos(14 * Math.PI / 180); // within ~14deg of horizontal = "flat"
 
   function nowMs() {
     return (typeof performance !== "undefined" ? performance.now() : Date.now());
@@ -435,10 +436,10 @@
       updateMotionTilt();
     }
 
-    // --- hold-to-play: stop when the tilt angle is frozen (set down),
-    //     start when it moves (picked up). Uses the tilt angle, so it is
-    //     independent of sensor noise and won't false-stop while held. ---
-    if (state.autoHold) {
+    // --- hold-to-play: stop ONLY when the phone lies flat (parallel to the
+    //     ground) and still — i.e. set down on a table. While tilted (playing)
+    //     it never stops, regardless of how steady the hand is. ---
+    if (state.autoHold && gravity) {
       const dAng = (prevTiltX === null)
         ? 0
         : Math.hypot(state.tiltX - prevTiltX, state.tiltY - prevTiltY);
@@ -446,18 +447,24 @@
       prevTiltY = state.tiltY;
       angSpeedEMA = angSpeedEMA * 0.7 + dAng * 0.3;
 
+      // flatness: |gz| dominates when the phone is horizontal (screen up or down)
+      const gMag = Math.hypot(gravity.x, gravity.y, gravity.z) || 1;
+      const isFlat = Math.abs(gravity.z) / gMag > FLAT_COS;
+
       const movedFromRef = Math.hypot(state.tiltX - stillRefX, state.tiltY - stillRefY);
       if (movedFromRef > STILL_ANGLE) {
         stillRefX = state.tiltX;
         stillRefY = state.tiltY;
-        lastMoveTime = t;               // the phone is being moved (held)
+        lastMoveTime = t;                 // still being moved
       }
       const still = (t - lastMoveTime > HOLD_STILL_MS);
-      if (still) holdSuppressed = false; // set down -> re-arm auto start
+      if (isFlat && still) holdSuppressed = false; // set down -> re-arm auto start
+
       if (!state.running) {
-        if (!holdSuppressed && angSpeedEMA > START_SPEED) play(); // picked up
-      } else if (still) {
-        stop();                          // resting on a surface
+        // start when picked up / tilted off flat
+        if (!holdSuppressed && (!isFlat || angSpeedEMA > START_SPEED)) play();
+      } else if (isFlat && still) {
+        stop();                           // lying flat & still = on the table
       }
     }
   }
