@@ -383,14 +383,19 @@
   let lastShakeTime = 0;
   const SHAKE_COOLDOWN = 260;   // ms between boings
 
-  // hold-to-play (stillness) detection — adaptive to each device's noise floor
-  let activityEMA = 0;          // smoothed jerk (hand tremor vs dead-still table)
-  let restFloor = 0;            // learned baseline noise while at rest
-  let lastMoveTime = 0;         // last time motion above the floor was seen
+  // hold-to-play detection — based on whether the TILT ANGLE is frozen.
+  // On a table the gravity direction is perfectly still, so the tilt angle does
+  // not change at all; a hand always drifts. This is independent of the sensor
+  // noise level, so it won't false-stop while held (the earlier jerk-based
+  // version could) and still stops reliably when set down.
+  let lastMoveTime = 0;         // last time the tilt angle moved beyond STILL_ANGLE
   let holdSuppressed = false;   // after a manual stop, don't auto-restart until set down
-  const HOLD_STILL = 0.05;      // activity-over-floor below this = still
-  const HOLD_MOVE = 0.30;       // activity-over-floor above this = clearly in hand
-  const HOLD_STILL_MS = 1300;   // must be still this long before auto-stopping
+  let prevTiltX = null, prevTiltY = null;
+  let angSpeedEMA = 0;          // smoothed per-sample tilt change (for pickup)
+  let stillRefX = 0, stillRefY = 0; // tilt anchor for the stillness window
+  const STILL_ANGLE = 1.0;      // deg; drift below this over the window = set down
+  const START_SPEED = 0.4;      // deg/sample (smoothed) to auto-start on pickup
+  const HOLD_STILL_MS = 1400;   // must be still this long before auto-stopping
 
   function nowMs() {
     return (typeof performance !== "undefined" ? performance.now() : Date.now());
@@ -417,25 +422,6 @@
       playBoing();
     }
 
-    // --- hold-to-play: start when moving, stop when set down (still) ---
-    if (state.autoHold) {
-      activityEMA = activityEMA * 0.85 + jerk * 0.15;
-      // Track the noise floor: ease down toward lows (so brief pauses of a steady
-      // hand aren't "resting"), and climb up toward a raised floor (e.g. speaker
-      // vibration on a hard surface) fast enough to still detect stillness.
-      if (activityEMA < restFloor) restFloor += (activityEMA - restFloor) * 0.05;
-      else restFloor += 0.002;
-      const over = activityEMA - restFloor; // activity above the resting noise
-      if (over > HOLD_STILL) lastMoveTime = t;
-      const still = (t - lastMoveTime > HOLD_STILL_MS);
-      if (still) holdSuppressed = false;          // set down -> re-arm auto start
-      if (!state.running) {
-        if (!holdSuppressed && over > HOLD_MOVE) play(); // picked up / moving
-      } else if (still) {
-        stop();                                    // resting on a surface
-      }
-    }
-
     // --- tilt from gravity vs. calibrated reference (robust in any orientation) ---
     if (e.accelerationIncludingGravity && e.accelerationIncludingGravity.x != null) {
       const g = e.accelerationIncludingGravity;
@@ -447,6 +433,32 @@
       usingMotionTilt = true;
       state.haveOrientation = true;
       updateMotionTilt();
+    }
+
+    // --- hold-to-play: stop when the tilt angle is frozen (set down),
+    //     start when it moves (picked up). Uses the tilt angle, so it is
+    //     independent of sensor noise and won't false-stop while held. ---
+    if (state.autoHold) {
+      const dAng = (prevTiltX === null)
+        ? 0
+        : Math.hypot(state.tiltX - prevTiltX, state.tiltY - prevTiltY);
+      prevTiltX = state.tiltX;
+      prevTiltY = state.tiltY;
+      angSpeedEMA = angSpeedEMA * 0.7 + dAng * 0.3;
+
+      const movedFromRef = Math.hypot(state.tiltX - stillRefX, state.tiltY - stillRefY);
+      if (movedFromRef > STILL_ANGLE) {
+        stillRefX = state.tiltX;
+        stillRefY = state.tiltY;
+        lastMoveTime = t;               // the phone is being moved (held)
+      }
+      const still = (t - lastMoveTime > HOLD_STILL_MS);
+      if (still) holdSuppressed = false; // set down -> re-arm auto start
+      if (!state.running) {
+        if (!holdSuppressed && angSpeedEMA > START_SPEED) play(); // picked up
+      } else if (still) {
+        stop();                          // resting on a surface
+      }
     }
   }
 
@@ -525,6 +537,12 @@
     fbCenterG = null;
     state.tiltX = 0;
     state.tiltY = 0;
+    // reset hold-to-play anchors so it doesn't immediately auto-stop
+    stillRefX = 0;
+    stillRefY = 0;
+    prevTiltX = null;
+    prevTiltY = null;
+    lastMoveTime = nowMs();
     updatePadDot();
     updateFrequency(false);
     showToast("中央にセットしました");
