@@ -54,6 +54,7 @@
     vibrato: 0,   // 0..100 -> vibrato depth
     shake: true,      // vibration -> boing jump sound
     shakeSens: 70,    // 0..100, higher = triggers on gentler shakes
+    autoHold: true,   // play while held, auto-stop when set down (still)
     tiltX: 0, // left/right (roll), relative to calibrated center
     tiltY: 0, // front/back (pitch), relative to calibrated center
     haveOrientation: false,
@@ -63,7 +64,7 @@
   const SETTINGS_KEY = "kakudo-synth-settings-v1";
   const PERSIST_KEYS = [
     "mode", "voice", "sensitivity", "rate", "rangeSemis",
-    "brightness", "volume", "scale", "root", "echo", "vibrato", "shake", "shakeSens",
+    "brightness", "volume", "scale", "root", "echo", "vibrato", "shake", "shakeSens", "autoHold",
   ];
 
   function loadSettings() {
@@ -305,6 +306,7 @@
     voiceGain.gain.cancelScheduledValues(now);
     voiceGain.gain.setTargetAtTime(0.35, now, 0.03);
     state.running = true;
+    lastMoveTime = nowMs(); // grace period so it doesn't auto-stop immediately
     els.powerBtn.textContent = "停止";
     els.powerBtn.setAttribute("aria-pressed", "true");
     els.pad.classList.add("live");
@@ -323,6 +325,18 @@
   }
 
   function toggle() { state.running ? stop() : play(); }
+
+  // Manual power button. With auto-hold on, a manual stop should stay stopped
+  // until the phone is set down and picked up again (don't fight the user).
+  function onPowerButton() {
+    if (state.running) {
+      stop();
+      if (state.autoHold) holdSuppressed = true;
+    } else {
+      holdSuppressed = false;
+      play();
+    }
+  }
 
   // ---------- Boing (spring jump) sound ----------
   // Plays a decaying, wobbling "びよよーん" independent of the tilt synth.
@@ -365,6 +379,18 @@
   let lastShakeTime = 0;
   const SHAKE_COOLDOWN = 260;   // ms between boings
 
+  // hold-to-play (stillness) detection
+  let activityEMA = 0;          // smoothed jerk (hand tremor vs dead-still table)
+  let lastMoveTime = 0;         // last time real motion was seen
+  let holdSuppressed = false;   // after a manual stop, don't auto-restart until set down
+  const HOLD_NOISE = 0.12;      // jerk below this counts as "still" (sensor noise)
+  const HOLD_MOVE = 0.30;       // smoothed activity above this = clearly in hand
+  const HOLD_STILL_MS = 1600;   // must be still this long before auto-stopping
+
+  function nowMs() {
+    return (typeof performance !== "undefined" ? performance.now() : Date.now());
+  }
+
   // 0 (needs a hard shake) .. 100 (very sensitive). Returns m/s^2 jerk threshold.
   function shakeThreshold() {
     return 28 - (state.shakeSens / 100) * 21; // 28 .. 7
@@ -373,17 +399,31 @@
   function onMotion(e) {
     const a = e.accelerationIncludingGravity || e.acceleration;
     if (!a || a.x == null) return;
+    const t = nowMs();
+
+    const jerk = lastAcc
+      ? Math.hypot(a.x - lastAcc.x, a.y - lastAcc.y, a.z - lastAcc.z)
+      : 0;
+    lastAcc = { x: a.x, y: a.y, z: a.z };
 
     // --- shake -> boing (only when enabled) ---
-    if (state.shake && lastAcc) {
-      const d = Math.hypot(a.x - lastAcc.x, a.y - lastAcc.y, a.z - lastAcc.z);
-      const t = (typeof performance !== "undefined" ? performance.now() : Date.now());
-      if (d > shakeThreshold() && t - lastShakeTime > SHAKE_COOLDOWN) {
-        lastShakeTime = t;
-        playBoing();
+    if (state.shake && jerk > shakeThreshold() && t - lastShakeTime > SHAKE_COOLDOWN) {
+      lastShakeTime = t;
+      playBoing();
+    }
+
+    // --- hold-to-play: start when moving, stop when set down (still) ---
+    if (state.autoHold) {
+      activityEMA = activityEMA * 0.88 + jerk * 0.12;
+      if (jerk > HOLD_NOISE) lastMoveTime = t;
+      const still = (t - lastMoveTime > HOLD_STILL_MS);
+      if (still) holdSuppressed = false;          // set down -> re-arm auto start
+      if (!state.running) {
+        if (!holdSuppressed && activityEMA > HOLD_MOVE) play(); // picked up / moving
+      } else if (still && activityEMA < HOLD_NOISE) {
+        stop();                                    // resting on a surface
       }
     }
-    lastAcc = { x: a.x, y: a.y, z: a.z };
 
     // --- tilt from gravity (works face-up or face-down; X axis responds) ---
     if (e.accelerationIncludingGravity && e.accelerationIncludingGravity.x != null) {
@@ -501,7 +541,7 @@
       "padRing", "noteReadout", "freqReadout", "modePicker", "modeDesc",
       "voicePicker", "sens", "sensVal", "rate", "rateVal", "range", "rangeVal",
       "bri", "briVal", "vib", "vibVal", "echo", "echoVal", "vol", "volVal",
-      "root", "scale", "shake", "shakeSens", "shakeSensVal",
+      "root", "scale", "shake", "shakeSens", "shakeSensVal", "autoHold",
       "calibrateBtn", "toast", "settingsBtn", "settingsClose", "settings", "sheetBackdrop",
       "shareBtn", "copyBtn", "qrcode", "shareUrl",
     ].forEach((id) => (els[id] = document.getElementById(id)));
@@ -594,7 +634,7 @@
   }
 
   function bindControls() {
-    els.powerBtn.addEventListener("click", toggle);
+    els.powerBtn.addEventListener("click", onPowerButton);
     els.calibrateBtn.addEventListener("click", calibrate);
 
     const fmtRate = (v) => (v >= 90 ? "速い" : v <= 15 ? "遅い" : String(v));
@@ -658,6 +698,12 @@
       state.shakeSens = parseInt(els.shakeSens.value, 10);
       els.shakeSensVal.textContent = state.shakeSens;
       saveSettings();
+    });
+    els.autoHold.addEventListener("change", () => {
+      state.autoHold = els.autoHold.checked;
+      holdSuppressed = false;
+      saveSettings();
+      showToast(state.autoHold ? "持つと鳴る：ON" : "持つと鳴る：OFF");
     });
 
     // settings sheet
@@ -757,6 +803,7 @@
     els.shake.checked = state.shake;
     els.shakeSens.value = state.shakeSens;
     els.shakeSensVal.textContent = state.shakeSens;
+    els.autoHold.checked = state.autoHold;
   }
 
   let toastTimer = null;
