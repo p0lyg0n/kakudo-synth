@@ -57,6 +57,8 @@
         <span id="noteReadout">–</span>
         <span id="freqReadout">0 Hz</span>
       </div>
+
+      <p class="settings-hint">傾けながら/音を聞きながら調整できます</p>
     </section>
 
     <footer class="bottombar">
@@ -69,91 +71,145 @@
     <div id="sheetBackdrop" class="sheet-backdrop"></div>
     <div class="sheet-panel" role="dialog" aria-label="設定">
       <div class="sheet-head">
+        <span class="sheet-grip"></span>
         <h2>設定</h2>
         <button id="settingsClose" class="icon-btn" aria-label="閉じる">✕</button>
       </div>
       <div class="sheet-body">
 
-        <div class="group">
-          <h3>モード</h3>
-          <div id="modePicker" class="mode-picker"></div>
-          <p id="modeDesc" class="group-desc"></p>
-        </div>
+        <!-- 演奏モード + 中心の設定 -->
+        <section class="card">
+          <div class="card-head"><span class="card-ico">🎛️</span><h3>演奏モード</h3></div>
+          <div id="modePicker" class="seg"></div>
+          <p id="modeDesc" class="hint"></p>
+          <button id="calibrateBtn" class="btn-outline">
+            <span class="btn-ico">🎯</span>今いる傾きを「中心」にする
+          </button>
+          <p class="hint">画面を下・水平に構えてから押すと、その姿勢が基準（中心）になります。</p>
+        </section>
 
-        <div class="group">
-          <h3>音色</h3>
+        <!-- 音色 -->
+        <section class="card">
+          <div class="card-head"><span class="card-ico">🎵</span><h3>音色</h3></div>
           <div id="voicePicker" class="voice-picker"></div>
-        </div>
+        </section>
 
-        <div class="group">
-          <h3>コントロール</h3>
+        <!-- 音の高さ -->
+        <section class="card">
+          <div class="card-head"><span class="card-ico">🎹</span><h3>音の高さ</h3></div>
 
-          <label class="ctrl">
-            <span class="ctrl-name">感度<em id="sensVal"></em></span>
-            <input id="sens" type="range" min="0.2" max="4" step="0.05" value="1.4" />
-          </label>
+          <div class="field">
+            <div class="field-head"><span class="field-label">音の変化</span></div>
+            <select id="scale" class="select-full">
+              <option value="continuous">無段階（連続・スライド）</option>
+              <option value="major">音階：メジャー</option>
+              <option value="minor">音階：マイナー</option>
+              <option value="pentatonic" selected>音階：ペンタトニック</option>
+              <option value="blues">音階：ブルース</option>
+              <option value="chromatic">音階：半音階</option>
+              <option value="whole">音階：全音音階</option>
+            </select>
+            <p class="hint">「無段階」は音がなめらかに連続変化。音階を選ぶとその音にピタッと合います。</p>
+          </div>
 
-          <label class="ctrl">
-            <span class="ctrl-name">変化の速さ<em id="rateVal"></em></span>
-            <input id="rate" type="range" min="0" max="100" step="1" value="55" />
-          </label>
-
-          <label class="ctrl">
-            <span class="ctrl-name">音域(半音)<em id="rangeVal"></em></span>
-            <input id="range" type="range" min="5" max="36" step="1" value="19" />
-          </label>
-
-          <label class="ctrl">
-            <span class="ctrl-name">明るさ幅<em id="briVal"></em></span>
-            <input id="bri" type="range" min="300" max="9000" step="50" value="6000" />
-          </label>
-
-          <label class="ctrl">
-            <span class="ctrl-name">音量<em id="volVal"></em></span>
-            <input id="vol" type="range" min="0" max="100" step="1" value="70" />
-          </label>
-
-          <div class="ctrl-row">
-            <label class="switch">
-              <input id="quantize" type="checkbox" checked />
-              <span>音階に合わせる</span>
-            </label>
-            <select id="scale" class="scale-select">
-              <option value="major">メジャー</option>
-              <option value="minor">マイナー</option>
-              <option value="pentatonic" selected>ペンタトニック</option>
-              <option value="blues">ブルース</option>
-              <option value="chromatic">半音階</option>
-              <option value="whole">全音音階</option>
+          <div class="field">
+            <div class="field-head"><span class="field-label">基準キー</span></div>
+            <select id="root" class="select-full">
+              <option value="0">A</option>
+              <option value="1">A#/B♭</option>
+              <option value="2">B</option>
+              <option value="3">C</option>
+              <option value="4">C#/D♭</option>
+              <option value="5">D</option>
+              <option value="6">D#/E♭</option>
+              <option value="7">E</option>
+              <option value="8">F</option>
+              <option value="9">F#/G♭</option>
+              <option value="10">G</option>
+              <option value="11">G#/A♭</option>
             </select>
           </div>
-        </div>
 
-        <div class="group">
-          <h3>振動エフェクト</h3>
-          <div class="ctrl-row">
-            <label class="switch">
-              <input id="shake" type="checkbox" checked />
-              <span>振ると「びよよーん」ジャンプ音</span>
-            </label>
+          <div class="field">
+            <div class="field-head"><span class="field-label">高さの幅</span><em id="rangeVal"></em></div>
+            <input id="range" type="range" min="5" max="36" step="1" value="19" />
+            <div class="field-ends"><span>せまい</span><span>ひろい</span></div>
           </div>
-          <p class="group-desc">スマホを強く振った瞬間、バネのようなジャンプ音が鳴ります。</p>
-        </div>
+        </section>
 
-        <div class="group">
-          <button id="calibrateBtn" class="calibrate-btn">今の傾きを中央にセット</button>
-          <p class="group-desc">画面を下に向け、机やお腹と平行に構えてから押すのがおすすめ。</p>
-        </div>
+        <!-- 傾きの反応 -->
+        <section class="card">
+          <div class="card-head"><span class="card-ico">📐</span><h3>傾きの反応</h3></div>
 
-        <div class="group">
-          <h3>このアプリを共有</h3>
+          <div class="field">
+            <div class="field-head"><span class="field-label">効き（感度）</span><em id="sensVal"></em></div>
+            <input id="sens" type="range" min="0.2" max="4" step="0.05" value="1.4" />
+            <div class="field-ends"><span>ゆるやか</span><span>敏感</span></div>
+          </div>
+
+          <div class="field">
+            <div class="field-head"><span class="field-label">音の追従</span><em id="rateVal"></em></div>
+            <input id="rate" type="range" min="0" max="100" step="1" value="55" />
+            <div class="field-ends"><span>なめらか</span><span>機敏</span></div>
+          </div>
+        </section>
+
+        <!-- 音の質感 -->
+        <section class="card">
+          <div class="card-head"><span class="card-ico">✨</span><h3>音の質感</h3></div>
+
+          <div class="field">
+            <div class="field-head"><span class="field-label">明るさ</span><em id="briVal"></em></div>
+            <input id="bri" type="range" min="300" max="9000" step="50" value="6000" />
+            <div class="field-ends"><span>暗い</span><span>明るい</span></div>
+          </div>
+
+          <div class="field">
+            <div class="field-head"><span class="field-label">ゆらぎ（ビブラート）</span><em id="vibVal"></em></div>
+            <input id="vib" type="range" min="0" max="100" step="1" value="0" />
+            <div class="field-ends"><span>なし</span><span>強い</span></div>
+          </div>
+
+          <div class="field">
+            <div class="field-head"><span class="field-label">残響（エコー）</span><em id="echoVal"></em></div>
+            <input id="echo" type="range" min="0" max="100" step="1" value="20" />
+            <div class="field-ends"><span>なし</span><span>広い</span></div>
+          </div>
+
+          <div class="field">
+            <div class="field-head"><span class="field-label">音量</span><em id="volVal"></em></div>
+            <input id="vol" type="range" min="0" max="100" step="1" value="70" />
+          </div>
+        </section>
+
+        <!-- 振動エフェクト -->
+        <section class="card">
+          <div class="card-head"><span class="card-ico">📳</span><h3>振動エフェクト</h3></div>
+          <label class="toggle-row">
+            <span class="toggle-text">
+              <strong>振ると「びよよーん」</strong>
+              <small>強く振るとバネのようなジャンプ音が鳴ります</small>
+            </span>
+            <input id="shake" type="checkbox" class="toggle" checked />
+          </label>
+
+          <div class="field" style="margin-top:16px">
+            <div class="field-head"><span class="field-label">ジャンプ音の感度</span><em id="shakeSensVal"></em></div>
+            <input id="shakeSens" type="range" min="0" max="100" step="1" value="70" />
+            <div class="field-ends"><span>強く振ると</span><span>軽く振っても</span></div>
+          </div>
+        </section>
+
+        <!-- 共有 -->
+        <section class="card">
+          <div class="card-head"><span class="card-ico">📤</span><h3>このアプリを共有</h3></div>
           <div class="share-row">
             <button id="shareBtn" class="share-btn">共有する</button>
             <button id="copyBtn" class="copy-btn">リンクをコピー</button>
           </div>
           <div id="qrcode" class="qrcode" aria-label="アプリのQRコード"></div>
           <p id="shareUrl" class="share-url"></p>
-        </div>
+        </section>
 
       </div>
     </div>

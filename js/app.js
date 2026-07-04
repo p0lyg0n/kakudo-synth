@@ -23,7 +23,7 @@
 
   const MODES = {
     axis:   { label: "軸モード",   emoji: "✛", desc: "左右に傾ける→音程 / 前後に傾ける→明るさ" },
-    center: { label: "中心モード", emoji: "◉", desc: "中心で低い音が鳴り、どの方向でも傾けて中心から離れるほど高くなる" },
+    center: { label: "中心モード", emoji: "◉", desc: "中心で低い音。どの方向でも中心から離れるほど高音になり、前後の傾きで明るさも変わります" },
   };
   const MODE_ORDER = ["axis", "center"];
 
@@ -48,9 +48,12 @@
     rangeSemis: 19,
     brightness: 6000,
     volume: 0.7,
-    quantize: true,
-    scale: "pentatonic",
-    shake: true, // vibration -> boing jump sound
+    scale: "pentatonic", // "continuous" = 無段階
+    root: 0,      // key transpose in semitones (0 = A)
+    echo: 20,     // 0..100 -> reverb-ish delay wet
+    vibrato: 0,   // 0..100 -> vibrato depth
+    shake: true,      // vibration -> boing jump sound
+    shakeSens: 70,    // 0..100, higher = triggers on gentler shakes
     centerBeta: null,
     centerGamma: null,
     tiltX: 0, // gamma
@@ -62,7 +65,7 @@
   const SETTINGS_KEY = "kakudo-synth-settings-v1";
   const PERSIST_KEYS = [
     "mode", "voice", "sensitivity", "rate", "rangeSemis",
-    "brightness", "volume", "quantize", "scale", "shake",
+    "brightness", "volume", "scale", "root", "echo", "vibrato", "shake", "shakeSens",
   ];
 
   function loadSettings() {
@@ -76,7 +79,7 @@
       // guard against unknown values from older versions
       if (!MODES[state.mode]) state.mode = "axis";
       if (!VOICES[state.voice]) state.voice = "super";
-      if (!SCALES[state.scale]) state.scale = "pentatonic";
+      if (!SCALES[state.scale] && state.scale !== "continuous") state.scale = "pentatonic";
     } catch (e) { /* ignore corrupt storage */ }
   }
 
@@ -90,6 +93,8 @@
 
   // ---------- Audio graph ----------
   let ctx = null, master = null, filter = null, voiceGain = null;
+  let delay = null, feedback = null, wet = null;   // echo
+  let lfo = null, lfoGain = null;                   // vibrato
   let nodes = [];
 
   function ensureContext() {
@@ -103,10 +108,36 @@
     filter.Q.value = 1.0;
     voiceGain = ctx.createGain();
     voiceGain.gain.value = 0;
+
+    // echo (feedback delay) send
+    delay = ctx.createDelay(1.0);
+    delay.delayTime.value = 0.28;
+    feedback = ctx.createGain();
+    feedback.gain.value = 0.34;
+    wet = ctx.createGain();
+    wet.gain.value = echoWet();
+
+    // vibrato LFO (modulates oscillator detune, in cents)
+    lfo = ctx.createOscillator();
+    lfo.type = "sine";
+    lfo.frequency.value = 5.2;
+    lfoGain = ctx.createGain();
+    lfoGain.gain.value = vibratoCents();
+    lfo.connect(lfoGain);
+    lfo.start();
+
     voiceGain.connect(filter);
-    filter.connect(master);
+    filter.connect(master);        // dry
+    filter.connect(delay);         // wet send
+    delay.connect(feedback);
+    feedback.connect(delay);       // feedback loop
+    delay.connect(wet);
+    wet.connect(master);
     master.connect(ctx.destination);
   }
+
+  function echoWet() { return (state.echo / 100) * 0.6; }
+  function vibratoCents() { return (state.vibrato / 100) * 55; }
 
   function smoothTime() {
     const t = state.rate / 100;
@@ -168,6 +199,13 @@
         nodes.sub = sub;
       }
     }
+    // apply vibrato to every oscillator's detune
+    nodes.forEach((n) => {
+      if (n.detune && lfoGain) {
+        try { lfoGain.connect(n.detune); } catch (e) { /* noop */ }
+      }
+    });
+
     updateFrequency(true);
   }
 
@@ -199,8 +237,9 @@
       semis = ((state.tiltX * state.sensitivity) / 8) * half;
       semis = Math.max(-half, Math.min(half, semis));
     }
-    if (state.quantize) semis = quantizeSemis(semis);
-    return BASE_FREQ * Math.pow(2, semis / 12);
+    // "continuous" = 無段階（連続）; otherwise snap to the chosen scale
+    if (state.scale !== "continuous") semis = quantizeSemis(semis);
+    return BASE_FREQ * Math.pow(2, (semis + state.root) / 12);
   }
 
   function quantizeSemis(semis) {
@@ -217,15 +256,11 @@
   }
 
   function currentCutoff() {
-    let norm;
-    if (state.mode === "center") {
-      const d = tiltDistance();
-      norm = Math.min(1, (d * state.sensitivity) / 60);
-    } else {
-      let by = (state.tiltY * state.sensitivity) / 45;
-      by = Math.max(-1, Math.min(1, by));
-      norm = (by + 1) / 2;
-    }
+    // Brightness is driven by front/back tilt (tiltY) in BOTH modes, so in
+    // center mode the direction of the tilt — not just the distance — matters.
+    let by = (state.tiltY * state.sensitivity) / 45;
+    by = Math.max(-1, Math.min(1, by));
+    const norm = (by + 1) / 2;
     const minF = 220;
     return Math.max(minF, minF + norm * (state.brightness - minF));
   }
@@ -323,8 +358,12 @@
   // ---------- Shake detection ----------
   let lastAcc = null;
   let lastShakeTime = 0;
-  const SHAKE_THRESHOLD = 13;   // m/s^2 change between samples (sensitive)
   const SHAKE_COOLDOWN = 260;   // ms between boings
+
+  // 0 (needs a hard shake) .. 100 (very sensitive). Returns m/s^2 jerk threshold.
+  function shakeThreshold() {
+    return 28 - (state.shakeSens / 100) * 21; // 28 .. 7
+  }
 
   function onMotion(e) {
     if (!state.shake) return;
@@ -333,7 +372,7 @@
     if (lastAcc) {
       const d = Math.hypot(a.x - lastAcc.x, a.y - lastAcc.y, a.z - lastAcc.z);
       const t = (typeof performance !== "undefined" ? performance.now() : Date.now());
-      if (d > SHAKE_THRESHOLD && t - lastShakeTime > SHAKE_COOLDOWN) {
+      if (d > shakeThreshold() && t - lastShakeTime > SHAKE_COOLDOWN) {
         lastShakeTime = t;
         playBoing();
       }
@@ -385,13 +424,30 @@
     return true;
   }
 
-  // Android: hide the OS navigation bar by going fullscreen (no-op on iOS Safari).
-  async function tryFullscreen() {
+  // Android: hide the OS navigation bar by going fullscreen (no-op on iOS Safari),
+  // and lock to portrait. MUST be called synchronously inside the tap handler —
+  // after an `await`, the browser no longer treats it as a user gesture and the
+  // fullscreen request is silently rejected.
+  function tryFullscreen() {
     const el = document.documentElement;
-    const req = el.requestFullscreen || el.webkitRequestFullscreen;
-    if (req) {
-      try { await req.call(el, { navigationUI: "hide" }); } catch (e) { /* ignore */ }
+    const req = el.requestFullscreen || el.webkitRequestFullscreen ||
+      el.mozRequestFullScreen || el.msRequestFullscreen;
+    if (!req) return;
+    let p;
+    try { p = req.call(el, { navigationUI: "hide" }); } catch (e) { return; }
+    if (p && typeof p.then === "function") {
+      p.then(lockPortrait).catch(() => {});
+    } else {
+      lockPortrait();
     }
+  }
+
+  function lockPortrait() {
+    try {
+      if (screen.orientation && screen.orientation.lock) {
+        screen.orientation.lock("portrait").catch(() => {});
+      }
+    } catch (e) { /* not supported (e.g. iOS Safari) */ }
   }
 
   // ---------- UI wiring ----------
@@ -401,7 +457,8 @@
       "overlay", "startBtn", "permHint", "app", "powerBtn", "pad", "padDot",
       "padRing", "noteReadout", "freqReadout", "modePicker", "modeDesc",
       "voicePicker", "sens", "sensVal", "rate", "rateVal", "range", "rangeVal",
-      "bri", "briVal", "vol", "volVal", "quantize", "scale", "shake",
+      "bri", "briVal", "vib", "vibVal", "echo", "echoVal", "vol", "volVal",
+      "root", "scale", "shake", "shakeSens", "shakeSensVal",
       "calibrateBtn", "toast", "settingsBtn", "settingsClose", "settings", "sheetBackdrop",
       "shareBtn", "copyBtn", "qrcode", "shareUrl",
     ].forEach((id) => (els[id] = document.getElementById(id)));
@@ -440,8 +497,8 @@
     if (labels.length === 4) {
       const [top, bottom, left, right] = labels;
       if (center) {
-        top.textContent = "外ほど高音";
-        bottom.textContent = "中心=低音";
+        top.textContent = "前=明るい / 外=高音";
+        bottom.textContent = "後=暗い / 中心=低音";
         left.textContent = "";
         right.textContent = "";
       } else {
@@ -521,15 +578,27 @@
       updateFrequency(false);
       saveSettings();
     });
+    els.vib.addEventListener("input", () => {
+      state.vibrato = parseInt(els.vib.value, 10);
+      els.vibVal.textContent = state.vibrato;
+      if (lfoGain && ctx) lfoGain.gain.setTargetAtTime(vibratoCents(), ctx.currentTime, 0.05);
+      saveSettings();
+    });
+    els.echo.addEventListener("input", () => {
+      state.echo = parseInt(els.echo.value, 10);
+      els.echoVal.textContent = state.echo;
+      if (wet && ctx) wet.gain.setTargetAtTime(echoWet(), ctx.currentTime, 0.05);
+      saveSettings();
+    });
+    els.root.addEventListener("change", () => {
+      state.root = parseInt(els.root.value, 10);
+      updateFrequency(false);
+      saveSettings();
+    });
     els.vol.addEventListener("input", () => {
       state.volume = parseInt(els.vol.value, 10) / 100;
       els.volVal.textContent = Math.round(state.volume * 100);
       if (master && ctx) master.gain.setTargetAtTime(state.volume, ctx.currentTime, 0.02);
-      saveSettings();
-    });
-    els.quantize.addEventListener("change", () => {
-      state.quantize = els.quantize.checked;
-      updateFrequency(false);
       saveSettings();
     });
     els.scale.addEventListener("change", () => {
@@ -542,6 +611,11 @@
       saveSettings();
       if (state.shake) showToast("振ると「びよよーん」がON");
     });
+    els.shakeSens.addEventListener("input", () => {
+      state.shakeSens = parseInt(els.shakeSens.value, 10);
+      els.shakeSensVal.textContent = state.shakeSens;
+      saveSettings();
+    });
 
     // settings sheet
     els.settingsBtn.addEventListener("click", openSettings);
@@ -551,10 +625,30 @@
     // share
     els.shareBtn.addEventListener("click", shareApp);
     els.copyBtn.addEventListener("click", copyLink);
+
+    // Stop the sound when the screen dims / locks or the app is backgrounded
+    // (otherwise Android keeps playing forever while idle).
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden && state.running) {
+        stop();
+        if (ctx) { try { ctx.suspend(); } catch (e) { /* noop */ } }
+      }
+    });
+    window.addEventListener("pagehide", () => { if (state.running) stop(); });
+    window.addEventListener("blur", () => {
+      // covers cases where the display sleeps without a visibility change
+      if (document.hidden && state.running) stop();
+    });
   }
 
-  function openSettings() { els.settings.hidden = false; }
-  function closeSettings() { els.settings.hidden = true; }
+  function openSettings() {
+    els.settings.hidden = false;
+    document.body.classList.add("settings-open");
+  }
+  function closeSettings() {
+    els.settings.hidden = true;
+    document.body.classList.remove("settings-open");
+  }
 
   // ---------- Share / QR ----------
   function appUrl() {
@@ -609,11 +703,17 @@
     els.rangeVal.textContent = state.rangeSemis;
     els.bri.value = state.brightness;
     els.briVal.textContent = Math.round(state.brightness / 1000) + "k";
+    els.vib.value = state.vibrato;
+    els.vibVal.textContent = state.vibrato;
+    els.echo.value = state.echo;
+    els.echoVal.textContent = state.echo;
     els.vol.value = Math.round(state.volume * 100);
     els.volVal.textContent = Math.round(state.volume * 100);
-    els.quantize.checked = state.quantize;
+    els.root.value = state.root;
     els.scale.value = state.scale;
     els.shake.checked = state.shake;
+    els.shakeSens.value = state.shakeSens;
+    els.shakeSensVal.textContent = state.shakeSens;
   }
 
   let toastTimer = null;
@@ -625,6 +725,10 @@
   }
 
   async function start() {
+    // Do this FIRST, synchronously, while we still have the tap gesture,
+    // so Android hides its navigation bar (fullscreen) and locks portrait.
+    tryFullscreen();
+
     ensureContext();
     if (ctx.state === "suspended") await ctx.resume();
 
@@ -639,8 +743,6 @@
     if (await requestMotionPermission()) {
       window.addEventListener("devicemotion", onMotion, true);
     }
-
-    tryFullscreen(); // Android: hide nav bar
 
     els.overlay.classList.add("hidden");
     els.app.hidden = false;
