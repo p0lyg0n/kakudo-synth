@@ -23,7 +23,7 @@
 
   const MODES = {
     axis:   { label: "軸モード",   emoji: "✛", desc: "左右に傾ける→音程 / 前後に傾ける→明るさ" },
-    center: { label: "中心モード", emoji: "◉", desc: "中心で低い音。どの方向でも中心から離れるほど高音になり、前後の傾きで明るさも変わります" },
+    center: { label: "中心モード", emoji: "◉", desc: "中心で低くこもった音。どの方向でも中心から離れるほど、高く・明るくなります（左右も前後も同じ効き）" },
   };
   const MODE_ORDER = ["axis", "center"];
 
@@ -254,11 +254,18 @@
   }
 
   function currentCutoff() {
-    // Brightness is driven by front/back tilt (tiltY) in BOTH modes, so in
-    // center mode the direction of the tilt — not just the distance — matters.
-    let by = (state.tiltY * state.sensitivity) / 45;
-    by = Math.max(-1, Math.min(1, by));
-    const norm = (by + 1) / 2;
+    let norm;
+    if (state.mode === "center") {
+      // Brightness follows the DISTANCE from center, so left/right and
+      // front/back have an identical effect (symmetric — no weak axis).
+      const d = tiltDistance();
+      norm = Math.min(1, (d * state.sensitivity) / 55);
+    } else {
+      // Axis mode: front/back tilt controls brightness.
+      let by = (state.tiltY * state.sensitivity) / 45;
+      by = Math.max(-1, Math.min(1, by));
+      norm = (by + 1) / 2;
+    }
     const minF = 220;
     return Math.max(minF, minF + norm * (state.brightness - minF));
   }
@@ -533,10 +540,10 @@
     if (labels.length === 4) {
       const [top, bottom, left, right] = labels;
       if (center) {
-        top.textContent = "前=明るい / 外=高音";
-        bottom.textContent = "後=暗い / 中心=低音";
-        left.textContent = "";
-        right.textContent = "";
+        top.textContent = "外ほど 高音・明るい";
+        bottom.textContent = "中心=低音・こもる";
+        left.textContent = "◀ 外へ";
+        right.textContent = "外へ ▶";
       } else {
         top.textContent = "高音 / 明";
         bottom.textContent = "低音 / 暗";
