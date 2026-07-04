@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Kakudo Synth 使い方ガイド</title>
+  <style>
+    :root { --violet:#7c5cff; --cyan:#22d3ee; --bg:#12101f; --panel:#1b1830; --text:#eef0ff; --dim:#a6a3c6; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg); color: var(--text); line-height: 1.8;
+      font-family: -apple-system, "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif;
+    }
+    .wrap { max-width: 760px; margin: 0 auto; padding: 32px 20px 80px; }
+    h1 { font-size: 2rem; margin: 0 0 4px; }
+    h1 .mark { background: linear-gradient(135deg,var(--violet),var(--cyan)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+    .lead { color: var(--dim); margin: 0 0 32px; }
+    h2 { margin: 40px 0 12px; font-size: 1.3rem; border-left: 4px solid var(--violet); padding-left: 12px; }
+    section { background: var(--panel); border: 1px solid rgba(255,255,255,.08); border-radius: 16px; padding: 4px 22px 18px; margin-bottom: 20px; }
+    code { background: rgba(255,255,255,.08); padding: 2px 7px; border-radius: 6px; font-size: .9em; }
+    table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+    th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid rgba(255,255,255,.08); vertical-align: top; }
+    th { color: var(--cyan); font-size: .9rem; white-space: nowrap; }
+    .tip { color: var(--dim); font-size: .92rem; }
+    ol, ul { padding-left: 22px; }
+    a { color: var(--cyan); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1><span class="mark">◐ Kakudo Synth</span> 使い方ガイド</h1>
+    <p class="lead">スマホを傾けて音を奏でる PWA シンセサイザー。</p>
+
+    <section>
+      <h2>1. インストール（ホーム画面に追加）</h2>
+      <ul>
+        <li><strong>iPhone (Safari)</strong>: 共有ボタン → 「ホーム画面に追加」</li>
+        <li><strong>Android (Chrome)</strong>: メニュー → 「アプリをインストール」／「ホーム画面に追加」</li>
+      </ul>
+      <p class="tip">ホーム画面から起動すると全画面のアプリとして動きます。オフラインでも起動できます。</p>
+    </section>
+
+    <section>
+      <h2>2. 演奏する</h2>
+      <ol>
+        <li>「タップして開始」を押す（iPhone はここでセンサー利用の許可ダイアログが出ます → 許可）。</li>
+        <li>スマホを<strong>画面が下・地面と平行</strong>になるように構える。</li>
+        <li><strong>左右に傾ける → 音程</strong>が変わる。</li>
+        <li><strong>前後に傾ける → 明るさ（音色の抜け）</strong>が変わる。</li>
+        <li>「停止／再生」ボタンで音の on/off。</li>
+      </ol>
+      <p class="tip">傾きセンサーが無い端末（PC など）では、中央のパッドを指やマウスでドラッグして演奏できます。</p>
+    </section>
+
+    <section>
+      <h2>3. コントロール一覧</h2>
+      <table>
+        <tr><th>音色</th><td>6 種類のシンセ音（サイン / ウォーム / スクエア / ノコギリ / スーパーソウ / FMベル）から選択。</td></tr>
+        <tr><th>感度</th><td>少しの傾きでどれだけ大きく音が変わるか。大きいほど敏感。</td></tr>
+        <tr><th>変化の速さ</th><td>傾きに音が追従する速さ。「遅い」ほど滑らかにグライド、「速い」ほど機敏。</td></tr>
+        <tr><th>音域(半音)</th><td>音程が動く幅。小さいほど狭い音域で繊細に、大きいほど大胆に。</td></tr>
+        <tr><th>明るさ幅</th><td>前後の傾きで開くローパスフィルターの上限。大きいほど明るい音まで出る。</td></tr>
+        <tr><th>音量</th><td>マスター音量。</td></tr>
+        <tr><th>音階に合わせる</th><td>ONで音程を選んだ音階の音にスナップ。OFFで連続的に変化。</td></tr>
+        <tr><th>音階</th><td>メジャー / マイナー / ペンタトニック / ブルース / 半音階 / 全音音階。</td></tr>
+        <tr><th>今の傾きを中央にセット</th><td>現在の構え方をニュートラル（中央）として校正。楽な姿勢を基準にできます。</td></tr>
+      </table>
+    </section>
+
+    <section>
+      <h2>4. うまく鳴らないとき</h2>
+      <ul>
+        <li>音が出ない → まず「タップして開始」→「再生」を押したか確認。マナーモード/音量も確認。</li>
+        <li>iPhone で傾きが効かない → センサー許可を拒否した可能性。アプリを再読み込みして許可し直す。</li>
+        <li>傾きの基準がずれる → 「今の傾きを中央にセット」を押す。</li>
+        <li>センサーは <code>https</code> または <code>localhost</code> でのみ動作します。</li>
+      </ul>
+    </section>
+
+    <p class="tip"><a href="../index.html">← アプリに戻る</a></p>
+  </div>
+</body>
+</html>
