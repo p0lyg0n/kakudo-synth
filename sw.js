@@ -1,10 +1,11 @@
 /* Service worker for Kakudo Synth — offline app shell caching. */
-const CACHE = "kakudo-synth-v1";
+const CACHE = "kakudo-synth-v2";
 const ASSETS = [
   "./",
   "./index.html",
   "./css/style.css",
   "./js/app.js",
+  "./js/qrcode.min.js",
   "./manifest.webmanifest",
   "./icons/icon-192.png",
   "./icons/icon-512.png",

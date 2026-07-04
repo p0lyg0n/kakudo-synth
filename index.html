@@ -29,93 +29,139 @@
     </div>
   </div>
 
+  <!-- メイン画面（スクロールしない・1画面に収まる） -->
   <main id="app" class="app" hidden>
     <header class="topbar">
       <div class="title">◐ Kakudo Synth</div>
-      <button id="powerBtn" class="power-btn" aria-pressed="false">再生</button>
+      <button id="settingsBtn" class="icon-btn" aria-label="設定">⚙</button>
     </header>
 
-    <!-- 傾きビジュアライザー -->
-    <section class="pad-wrap">
-      <div id="pad" class="pad">
-        <div class="pad-grid"></div>
-        <div class="pad-axis pad-axis-x"></div>
-        <div class="pad-axis pad-axis-y"></div>
-        <div id="padDot" class="pad-dot"></div>
+    <section class="stage">
+      <div class="pad-wrap">
+        <div id="pad" class="pad">
+          <div class="pad-grid"></div>
+          <div class="pad-axis pad-axis-x"></div>
+          <div class="pad-axis pad-axis-y"></div>
+          <div id="padRing" class="pad-ring" hidden></div>
+          <div id="padDot" class="pad-dot"></div>
+        </div>
+        <div class="pad-labels">
+          <span class="lbl-top">高音 / 明</span>
+          <span class="lbl-bottom">低音 / 暗</span>
+          <span class="lbl-left">◀ 音程</span>
+          <span class="lbl-right">音程 ▶</span>
+        </div>
       </div>
-      <div class="pad-labels">
-        <span class="lbl-top">高音 / 明</span>
-        <span class="lbl-bottom">低音 / 暗</span>
-        <span class="lbl-left">◀ 音程</span>
-        <span class="lbl-right">音程 ▶</span>
-      </div>
+
       <div id="readout" class="readout">
         <span id="noteReadout">–</span>
         <span id="freqReadout">0 Hz</span>
       </div>
     </section>
 
-    <!-- 音色選択 -->
-    <section class="panel">
-      <h2>音色</h2>
-      <div id="voicePicker" class="voice-picker"></div>
-    </section>
-
-    <!-- コントロール -->
-    <section class="panel">
-      <h2>コントロール</h2>
-
-      <label class="ctrl">
-        <span class="ctrl-name">感度<em id="sensVal"></em></span>
-        <input id="sens" type="range" min="0.2" max="4" step="0.05" value="1.4" />
-      </label>
-
-      <label class="ctrl">
-        <span class="ctrl-name">変化の速さ<em id="rateVal"></em></span>
-        <input id="rate" type="range" min="0" max="100" step="1" value="55" />
-      </label>
-
-      <label class="ctrl">
-        <span class="ctrl-name">音域(半音)<em id="rangeVal"></em></span>
-        <input id="range" type="range" min="5" max="36" step="1" value="19" />
-      </label>
-
-      <label class="ctrl">
-        <span class="ctrl-name">明るさ幅<em id="briVal"></em></span>
-        <input id="bri" type="range" min="300" max="9000" step="50" value="6000" />
-      </label>
-
-      <label class="ctrl">
-        <span class="ctrl-name">音量<em id="volVal"></em></span>
-        <input id="vol" type="range" min="0" max="100" step="1" value="70" />
-      </label>
-
-      <div class="ctrl-row">
-        <label class="switch">
-          <input id="quantize" type="checkbox" checked />
-          <span>音階に合わせる</span>
-        </label>
-        <select id="scale" class="scale-select">
-          <option value="major">メジャー</option>
-          <option value="minor">マイナー</option>
-          <option value="pentatonic" selected>ペンタトニック</option>
-          <option value="blues">ブルース</option>
-          <option value="chromatic">半音階</option>
-          <option value="whole">全音音階</option>
-        </select>
-      </div>
-
-      <button id="calibrateBtn" class="calibrate-btn">今の傾きを中央にセット</button>
-    </section>
-
-    <p class="footnote">
-      画面を下に向け、机やお腹と平行に構えるのがおすすめ。<br />
-      「中央にセット」で今の姿勢を基準にできます。
-    </p>
+    <footer class="bottombar">
+      <button id="powerBtn" class="power-btn" aria-pressed="false">再生</button>
+    </footer>
   </main>
+
+  <!-- 設定シート -->
+  <div id="settings" class="sheet" hidden>
+    <div id="sheetBackdrop" class="sheet-backdrop"></div>
+    <div class="sheet-panel" role="dialog" aria-label="設定">
+      <div class="sheet-head">
+        <h2>設定</h2>
+        <button id="settingsClose" class="icon-btn" aria-label="閉じる">✕</button>
+      </div>
+      <div class="sheet-body">
+
+        <div class="group">
+          <h3>モード</h3>
+          <div id="modePicker" class="mode-picker"></div>
+          <p id="modeDesc" class="group-desc"></p>
+        </div>
+
+        <div class="group">
+          <h3>音色</h3>
+          <div id="voicePicker" class="voice-picker"></div>
+        </div>
+
+        <div class="group">
+          <h3>コントロール</h3>
+
+          <label class="ctrl">
+            <span class="ctrl-name">感度<em id="sensVal"></em></span>
+            <input id="sens" type="range" min="0.2" max="4" step="0.05" value="1.4" />
+          </label>
+
+          <label class="ctrl">
+            <span class="ctrl-name">変化の速さ<em id="rateVal"></em></span>
+            <input id="rate" type="range" min="0" max="100" step="1" value="55" />
+          </label>
+
+          <label class="ctrl">
+            <span class="ctrl-name">音域(半音)<em id="rangeVal"></em></span>
+            <input id="range" type="range" min="5" max="36" step="1" value="19" />
+          </label>
+
+          <label class="ctrl">
+            <span class="ctrl-name">明るさ幅<em id="briVal"></em></span>
+            <input id="bri" type="range" min="300" max="9000" step="50" value="6000" />
+          </label>
+
+          <label class="ctrl">
+            <span class="ctrl-name">音量<em id="volVal"></em></span>
+            <input id="vol" type="range" min="0" max="100" step="1" value="70" />
+          </label>
+
+          <div class="ctrl-row">
+            <label class="switch">
+              <input id="quantize" type="checkbox" checked />
+              <span>音階に合わせる</span>
+            </label>
+            <select id="scale" class="scale-select">
+              <option value="major">メジャー</option>
+              <option value="minor">マイナー</option>
+              <option value="pentatonic" selected>ペンタトニック</option>
+              <option value="blues">ブルース</option>
+              <option value="chromatic">半音階</option>
+              <option value="whole">全音音階</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="group">
+          <h3>振動エフェクト</h3>
+          <div class="ctrl-row">
+            <label class="switch">
+              <input id="shake" type="checkbox" checked />
+              <span>振ると「びよよーん」ジャンプ音</span>
+            </label>
+          </div>
+          <p class="group-desc">スマホを強く振った瞬間、バネのようなジャンプ音が鳴ります。</p>
+        </div>
+
+        <div class="group">
+          <button id="calibrateBtn" class="calibrate-btn">今の傾きを中央にセット</button>
+          <p class="group-desc">画面を下に向け、机やお腹と平行に構えてから押すのがおすすめ。</p>
+        </div>
+
+        <div class="group">
+          <h3>このアプリを共有</h3>
+          <div class="share-row">
+            <button id="shareBtn" class="share-btn">共有する</button>
+            <button id="copyBtn" class="copy-btn">リンクをコピー</button>
+          </div>
+          <div id="qrcode" class="qrcode" aria-label="アプリのQRコード"></div>
+          <p id="shareUrl" class="share-url"></p>
+        </div>
+
+      </div>
+    </div>
+  </div>
 
   <div id="toast" class="toast" hidden></div>
 
+  <script src="./js/qrcode.min.js"></script>
   <script src="./js/app.js"></script>
 </body>
 </html>

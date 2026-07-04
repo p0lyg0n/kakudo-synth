@@ -1,14 +1,16 @@
 /* Kakudo Synth — tilt-controlled Web Audio synthesizer PWA
  *
- * Hold the phone face-down and roughly level. Tilting left/right (gamma) sweeps
- * the pitch; tilting front/back (beta) sweeps brightness (filter cutoff).
- * A calibration step captures the neutral posture so any hold angle works.
+ * Modes:
+ *   axis   : gamma (left/right) -> pitch, beta (front/back) -> brightness
+ *   center : distance from the calibrated center -> pitch (farther = higher);
+ *            brightness also opens up as you move away from center.
+ *
+ * Hold the phone face-down and roughly level, then tilt.
  */
 (() => {
   "use strict";
 
   // ---------- Voice / preset definitions ----------
-  // Each preset builds its own graph from a shared output gain and filter.
   const VOICES = {
     sine:   { label: "サイン",   emoji: "〰️", type: "sine",     detune: 0,  sub: false },
     warm:   { label: "ウォーム", emoji: "🟣", type: "triangle", detune: 0,  sub: true  },
@@ -18,6 +20,12 @@
     fm:     { label: "ベル(FM)", emoji: "🔔", type: "fm",       detune: 0,  sub: false },
   };
   const VOICE_ORDER = ["sine", "warm", "square", "saw", "super", "fm"];
+
+  const MODES = {
+    axis:   { label: "軸モード",   emoji: "✛", desc: "左右に傾ける→音程 / 前後に傾ける→明るさ" },
+    center: { label: "中心モード", emoji: "◉", desc: "中心で低い音が鳴り、どの方向でも傾けて中心から離れるほど高くなる" },
+  };
+  const MODE_ORDER = ["axis", "center"];
 
   const SCALES = {
     major:      [0, 2, 4, 5, 7, 9, 11],
@@ -33,28 +41,56 @@
   // ---------- State ----------
   const state = {
     running: false,
+    mode: "axis",
     voice: "super",
     sensitivity: 1.4,
-    rate: 55,        // 0..100 -> smoothing time
-    rangeSemis: 19,  // total pitch swing in semitones
+    rate: 55,
+    rangeSemis: 19,
     brightness: 6000,
     volume: 0.7,
     quantize: true,
     scale: "pentatonic",
+    shake: true, // vibration -> boing jump sound
     centerBeta: null,
     centerGamma: null,
-    // live tilt (deg, relative to center)
-    tiltX: 0, // gamma -> pitch
-    tiltY: 0, // beta -> brightness
+    tiltX: 0, // gamma
+    tiltY: 0, // beta
     haveOrientation: false,
   };
 
+  // ---------- Persistence ----------
+  const SETTINGS_KEY = "kakudo-synth-settings-v1";
+  const PERSIST_KEYS = [
+    "mode", "voice", "sensitivity", "rate", "rangeSemis",
+    "brightness", "volume", "quantize", "scale", "shake",
+  ];
+
+  function loadSettings() {
+    try {
+      const raw = localStorage.getItem(SETTINGS_KEY);
+      if (!raw) return;
+      const saved = JSON.parse(raw);
+      PERSIST_KEYS.forEach((k) => {
+        if (saved[k] !== undefined) state[k] = saved[k];
+      });
+      // guard against unknown values from older versions
+      if (!MODES[state.mode]) state.mode = "axis";
+      if (!VOICES[state.voice]) state.voice = "super";
+      if (!SCALES[state.scale]) state.scale = "pentatonic";
+    } catch (e) { /* ignore corrupt storage */ }
+  }
+
+  function saveSettings() {
+    try {
+      const out = {};
+      PERSIST_KEYS.forEach((k) => (out[k] = state[k]));
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify(out));
+    } catch (e) { /* storage unavailable / full */ }
+  }
+
   // ---------- Audio graph ----------
-  let ctx = null;
-  let master = null;   // master gain (volume)
-  let filter = null;   // lowpass for brightness
-  let voiceGain = null; // per-voice gain envelope
-  let nodes = [];      // oscillators/gains for current voice, to stop on change
+  let ctx = null, master = null, filter = null, voiceGain = null;
+  let nodes = [];
 
   function ensureContext() {
     if (ctx) return;
@@ -72,10 +108,8 @@
     master.connect(ctx.destination);
   }
 
-  // time constant for setTargetAtTime, from rate slider (higher = faster)
   function smoothTime() {
-    const t = state.rate / 100; // 0..1
-    // rate 0 -> ~0.4s glide (slow), rate 100 -> ~0.01s (snappy)
+    const t = state.rate / 100;
     return 0.4 * Math.pow(0.025, t);
   }
 
@@ -86,22 +120,20 @@
     const freq = currentFreq();
 
     if (def.type === "fm") {
-      // simple 2-op FM: modulator -> carrier.frequency
       const carrier = ctx.createOscillator();
       carrier.type = "sine";
       carrier.frequency.value = freq;
       const mod = ctx.createOscillator();
       mod.type = "sine";
-      mod.frequency.value = freq * 2; // harmonic ratio
+      mod.frequency.value = freq * 2;
       const modGain = ctx.createGain();
-      modGain.gain.value = freq * 3; // modulation index
+      modGain.gain.value = freq * 3;
       mod.connect(modGain);
       modGain.connect(carrier.frequency);
       carrier.connect(voiceGain);
       carrier.start(now);
       mod.start(now);
       nodes = [carrier, mod, modGain];
-      nodes.fmCarrier = carrier;
       nodes.fmMod = mod;
       nodes.fmModGain = modGain;
     } else if (def.type === "supersaw") {
@@ -150,14 +182,24 @@
     nodes = [];
   }
 
+  // distance from center, 0..~ (deg). Diagonal counts.
+  function tiltDistance() {
+    return Math.hypot(state.tiltX, state.tiltY);
+  }
+
   function currentFreq() {
-    // tiltX (deg) * sensitivity -> position within pitch range
-    const half = state.rangeSemis / 2;
-    let semis = (state.tiltX * state.sensitivity) / 8 * half;
-    semis = Math.max(-half, Math.min(half, semis));
-    if (state.quantize) {
-      semis = quantizeSemis(semis);
+    let semis;
+    if (state.mode === "center") {
+      // distance from center -> upward pitch only
+      const d = tiltDistance();
+      semis = (d * state.sensitivity) / 6; // deg -> semis
+      semis = Math.max(0, Math.min(state.rangeSemis, semis));
+    } else {
+      const half = state.rangeSemis / 2;
+      semis = ((state.tiltX * state.sensitivity) / 8) * half;
+      semis = Math.max(-half, Math.min(half, semis));
     }
+    if (state.quantize) semis = quantizeSemis(semis);
     return BASE_FREQ * Math.pow(2, semis / 12);
   }
 
@@ -166,14 +208,26 @@
     const rounded = Math.round(semis);
     const octave = Math.floor(rounded / 12);
     const within = ((rounded % 12) + 12) % 12;
-    // snap `within` to nearest scale degree
-    let best = scale[0];
-    let bestD = 99;
+    let best = scale[0], bestD = 99;
     for (const s of scale) {
       const d = Math.abs(s - within);
       if (d < bestD) { bestD = d; best = s; }
     }
     return octave * 12 + best;
+  }
+
+  function currentCutoff() {
+    let norm;
+    if (state.mode === "center") {
+      const d = tiltDistance();
+      norm = Math.min(1, (d * state.sensitivity) / 60);
+    } else {
+      let by = (state.tiltY * state.sensitivity) / 45;
+      by = Math.max(-1, Math.min(1, by));
+      norm = (by + 1) / 2;
+    }
+    const minF = 220;
+    return Math.max(minF, minF + norm * (state.brightness - minF));
   }
 
   function updateFrequency(immediate) {
@@ -185,7 +239,6 @@
 
     nodes.forEach((n) => {
       if (n.frequency && n.type !== undefined && n !== nodes.fmMod && n !== nodes.sub) {
-        // oscillators (carrier / saws / main). fmMod & sub handled below.
         n.frequency.setTargetAtTime(freq, now, tc);
       }
     });
@@ -197,14 +250,7 @@
       nodes.sub.frequency.setTargetAtTime(freq / 2, now, tc);
     }
 
-    // brightness from tiltY
-    const half = 1;
-    let by = (state.tiltY * state.sensitivity) / 45; // -1..1-ish
-    by = Math.max(-half, Math.min(half, by));
-    const norm = (by + 1) / 2; // 0..1
-    const minF = 220;
-    const cutoff = minF + norm * (state.brightness - minF);
-    filter.frequency.setTargetAtTime(Math.max(minF, cutoff), now, tc);
+    filter.frequency.setTargetAtTime(currentCutoff(), now, tc);
 
     updateReadout(freq);
     updatePadDot();
@@ -236,9 +282,72 @@
     els.pad.classList.remove("live");
   }
 
-  function toggle() {
-    if (state.running) stop();
-    else play();
+  function toggle() { state.running ? stop() : play(); }
+
+  // ---------- Boing (spring jump) sound ----------
+  // Plays a decaying, wobbling "びよよーん" independent of the tilt synth.
+  function playBoing() {
+    ensureContext();
+    if (ctx.state === "suspended") ctx.resume();
+    const now = ctx.currentTime;
+    const dur = 0.62;
+
+    const osc = ctx.createOscillator();
+    osc.type = "triangle";
+
+    // pitch curve: a fast-decaying vibrato riding an overall downward glide
+    const N = 96;
+    const curve = new Float32Array(N);
+    const fBase = 560;
+    for (let i = 0; i < N; i++) {
+      const t = (i / (N - 1)) * dur;
+      const env = Math.exp(-t * 4.5);                       // wobble decays
+      const wobble = Math.sin(2 * Math.PI * 9 * t) * 0.7 * env;
+      const drift = -0.9 * (t / dur);                       // slides down
+      curve[i] = Math.max(60, fBase * Math.pow(2, wobble + drift));
+    }
+    osc.frequency.setValueCurveAtTime(curve, now, dur);
+
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, now);
+    g.gain.exponentialRampToValueAtTime(0.7, now + 0.008);
+    g.gain.exponentialRampToValueAtTime(0.0008, now + dur);
+
+    osc.connect(g);
+    g.connect(master); // through master volume, bypassing the tilt filter
+    osc.start(now);
+    osc.stop(now + dur + 0.05);
+    osc.onended = () => { try { osc.disconnect(); g.disconnect(); } catch (e) { /* noop */ } };
+  }
+
+  // ---------- Shake detection ----------
+  let lastAcc = null;
+  let lastShakeTime = 0;
+  const SHAKE_THRESHOLD = 13;   // m/s^2 change between samples (sensitive)
+  const SHAKE_COOLDOWN = 260;   // ms between boings
+
+  function onMotion(e) {
+    if (!state.shake) return;
+    const a = e.accelerationIncludingGravity || e.acceleration;
+    if (!a || a.x == null) return;
+    if (lastAcc) {
+      const d = Math.hypot(a.x - lastAcc.x, a.y - lastAcc.y, a.z - lastAcc.z);
+      const t = (typeof performance !== "undefined" ? performance.now() : Date.now());
+      if (d > SHAKE_THRESHOLD && t - lastShakeTime > SHAKE_COOLDOWN) {
+        lastShakeTime = t;
+        playBoing();
+      }
+    }
+    lastAcc = { x: a.x, y: a.y, z: a.z };
+  }
+
+  async function requestMotionPermission() {
+    const M = window.DeviceMotionEvent;
+    if (M && typeof M.requestPermission === "function") {
+      try { return (await M.requestPermission()) === "granted"; }
+      catch (e) { return false; }
+    }
+    return true;
   }
 
   // ---------- Orientation ----------
@@ -249,13 +358,12 @@
       state.centerBeta = e.beta;
       state.centerGamma = e.gamma;
     }
-    // relative tilt, with wrap handling for beta
     let dBeta = e.beta - state.centerBeta;
     let dGamma = e.gamma - state.centerGamma;
     if (dBeta > 180) dBeta -= 360;
     if (dBeta < -180) dBeta += 360;
-    state.tiltX = dGamma; // left/right -> pitch
-    state.tiltY = dBeta;  // front/back -> brightness
+    state.tiltX = dGamma;
+    state.tiltY = dBeta;
     updateFrequency(false);
   }
 
@@ -271,14 +379,19 @@
   async function requestOrientationPermission() {
     const D = window.DeviceOrientationEvent;
     if (D && typeof D.requestPermission === "function") {
-      try {
-        const res = await D.requestPermission();
-        return res === "granted";
-      } catch (e) {
-        return false;
-      }
+      try { return (await D.requestPermission()) === "granted"; }
+      catch (e) { return false; }
     }
-    return true; // Android / desktop: no explicit permission needed
+    return true;
+  }
+
+  // Android: hide the OS navigation bar by going fullscreen (no-op on iOS Safari).
+  async function tryFullscreen() {
+    const el = document.documentElement;
+    const req = el.requestFullscreen || el.webkitRequestFullscreen;
+    if (req) {
+      try { await req.call(el, { navigationUI: "hide" }); } catch (e) { /* ignore */ }
+    }
   }
 
   // ---------- UI wiring ----------
@@ -286,10 +399,58 @@
   function cacheEls() {
     [
       "overlay", "startBtn", "permHint", "app", "powerBtn", "pad", "padDot",
-      "noteReadout", "freqReadout", "voicePicker", "sens", "sensVal", "rate",
-      "rateVal", "range", "rangeVal", "bri", "briVal", "vol", "volVal",
-      "quantize", "scale", "calibrateBtn", "toast",
+      "padRing", "noteReadout", "freqReadout", "modePicker", "modeDesc",
+      "voicePicker", "sens", "sensVal", "rate", "rateVal", "range", "rangeVal",
+      "bri", "briVal", "vol", "volVal", "quantize", "scale", "shake",
+      "calibrateBtn", "toast", "settingsBtn", "settingsClose", "settings", "sheetBackdrop",
+      "shareBtn", "copyBtn", "qrcode", "shareUrl",
     ].forEach((id) => (els[id] = document.getElementById(id)));
+  }
+
+  function buildModePicker() {
+    els.modePicker.innerHTML = "";
+    MODE_ORDER.forEach((key) => {
+      const m = MODES[key];
+      const btn = document.createElement("button");
+      btn.className = "mode-btn" + (key === state.mode ? " active" : "");
+      btn.dataset.mode = key;
+      btn.innerHTML = `<span class="emoji">${m.emoji}</span>${m.label}`;
+      btn.addEventListener("click", () => selectMode(key));
+      els.modePicker.appendChild(btn);
+    });
+    applyModeUI();
+  }
+
+  function selectMode(key) {
+    state.mode = key;
+    [...els.modePicker.children].forEach((b) =>
+      b.classList.toggle("active", b.dataset.mode === key)
+    );
+    applyModeUI();
+    updateFrequency(false);
+    saveSettings();
+  }
+
+  function applyModeUI() {
+    els.modeDesc.textContent = MODES[state.mode].desc;
+    const center = state.mode === "center";
+    els.padRing.hidden = !center;
+    // update pad edge labels per mode
+    const labels = document.querySelectorAll(".pad-labels span");
+    if (labels.length === 4) {
+      const [top, bottom, left, right] = labels;
+      if (center) {
+        top.textContent = "外ほど高音";
+        bottom.textContent = "中心=低音";
+        left.textContent = "";
+        right.textContent = "";
+      } else {
+        top.textContent = "高音 / 明";
+        bottom.textContent = "低音 / 暗";
+        left.textContent = "◀ 音程";
+        right.textContent = "音程 ▶";
+      }
+    }
   }
 
   function buildVoicePicker() {
@@ -311,6 +472,7 @@
       b.classList.toggle("active", b.dataset.voice === key)
     );
     if (state.running) buildVoice();
+    saveSettings();
   }
 
   function updateReadout(freq) {
@@ -322,62 +484,127 @@
   }
 
   function updatePadDot() {
-    // map tilt to 0..100% of pad
-    const half = state.rangeSemis / 2;
-    let px = (state.tiltX * state.sensitivity) / 8 * half; // semis
-    px = Math.max(-half, Math.min(half, px)) / half; // -1..1
-    let py = (state.tiltY * state.sensitivity) / 45;
+    // pad position always reflects raw tilt direction (works for both modes)
+    let px = ((state.tiltX * state.sensitivity) / 8);
+    px = Math.max(-1, Math.min(1, px));
+    let py = ((state.tiltY * state.sensitivity) / 45);
     py = Math.max(-1, Math.min(1, py));
-    const left = 50 + px * 48;
-    const top = 50 - py * 48; // tilt forward (positive beta) -> up = brighter
-    els.padDot.style.left = left + "%";
-    els.padDot.style.top = top + "%";
+    els.padDot.style.left = (50 + px * 48) + "%";
+    els.padDot.style.top = (50 - py * 48) + "%";
   }
 
   function bindControls() {
     els.powerBtn.addEventListener("click", toggle);
     els.calibrateBtn.addEventListener("click", calibrate);
 
-    const fmtRate = (v) => (v >= 90 ? "速い" : v <= 15 ? "遅い" : v + "");
+    const fmtRate = (v) => (v >= 90 ? "速い" : v <= 15 ? "遅い" : String(v));
     els.sens.addEventListener("input", () => {
       state.sensitivity = parseFloat(els.sens.value);
       els.sensVal.textContent = state.sensitivity.toFixed(2);
       updateFrequency(false);
+      saveSettings();
     });
     els.rate.addEventListener("input", () => {
       state.rate = parseInt(els.rate.value, 10);
       els.rateVal.textContent = fmtRate(state.rate);
+      saveSettings();
     });
     els.range.addEventListener("input", () => {
       state.rangeSemis = parseInt(els.range.value, 10);
       els.rangeVal.textContent = state.rangeSemis;
       updateFrequency(false);
+      saveSettings();
     });
     els.bri.addEventListener("input", () => {
       state.brightness = parseInt(els.bri.value, 10);
       els.briVal.textContent = Math.round(state.brightness / 1000) + "k";
       updateFrequency(false);
+      saveSettings();
     });
     els.vol.addEventListener("input", () => {
       state.volume = parseInt(els.vol.value, 10) / 100;
       els.volVal.textContent = Math.round(state.volume * 100);
       if (master && ctx) master.gain.setTargetAtTime(state.volume, ctx.currentTime, 0.02);
+      saveSettings();
     });
     els.quantize.addEventListener("change", () => {
       state.quantize = els.quantize.checked;
       updateFrequency(false);
+      saveSettings();
     });
     els.scale.addEventListener("change", () => {
       state.scale = els.scale.value;
       updateFrequency(false);
+      saveSettings();
     });
+    els.shake.addEventListener("change", () => {
+      state.shake = els.shake.checked;
+      saveSettings();
+      if (state.shake) showToast("振ると「びよよーん」がON");
+    });
+
+    // settings sheet
+    els.settingsBtn.addEventListener("click", openSettings);
+    els.settingsClose.addEventListener("click", closeSettings);
+    els.sheetBackdrop.addEventListener("click", closeSettings);
+
+    // share
+    els.shareBtn.addEventListener("click", shareApp);
+    els.copyBtn.addEventListener("click", copyLink);
+  }
+
+  function openSettings() { els.settings.hidden = false; }
+  function closeSettings() { els.settings.hidden = true; }
+
+  // ---------- Share / QR ----------
+  function appUrl() {
+    // canonical URL without hash/query
+    return location.origin + location.pathname;
+  }
+
+  async function shareApp() {
+    const url = appUrl();
+    const data = { title: "Kakudo Synth · 傾きシンセ", text: "スマホを傾けて音を奏でるシンセ", url };
+    if (navigator.share) {
+      try { await navigator.share(data); return; } catch (e) { /* cancelled */ return; }
+    }
+    copyLink();
+  }
+
+  async function copyLink() {
+    const url = appUrl();
+    try {
+      await navigator.clipboard.writeText(url);
+      showToast("リンクをコピーしました");
+    } catch (e) {
+      showToast(url);
+    }
+  }
+
+  function renderQR() {
+    const url = appUrl();
+    els.shareUrl.textContent = url;
+    if (typeof window.qrcode !== "function") return;
+    try {
+      const qr = window.qrcode(0, "M"); // auto type, medium ECC
+      qr.addData(url);
+      qr.make();
+      els.qrcode.innerHTML = qr.createSvgTag({ cellSize: 5, margin: 2, scalable: true });
+      const svg = els.qrcode.querySelector("svg");
+      if (svg) {
+        svg.removeAttribute("width");
+        svg.removeAttribute("height");
+      }
+    } catch (e) {
+      els.qrcode.textContent = "QRコードを生成できませんでした";
+    }
   }
 
   function syncControlLabels() {
     els.sens.value = state.sensitivity;
     els.sensVal.textContent = state.sensitivity.toFixed(2);
     els.rate.value = state.rate;
-    els.rateVal.textContent = state.rate >= 90 ? "速い" : state.rate <= 15 ? "遅い" : state.rate + "";
+    els.rateVal.textContent = state.rate >= 90 ? "速い" : state.rate <= 15 ? "遅い" : String(state.rate);
     els.range.value = state.rangeSemis;
     els.rangeVal.textContent = state.rangeSemis;
     els.bri.value = state.brightness;
@@ -386,6 +613,7 @@
     els.volVal.textContent = Math.round(state.volume * 100);
     els.quantize.checked = state.quantize;
     els.scale.value = state.scale;
+    els.shake.checked = state.shake;
   }
 
   let toastTimer = null;
@@ -393,7 +621,7 @@
     els.toast.textContent = msg;
     els.toast.hidden = false;
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => (els.toast.hidden = true), 1600);
+    toastTimer = setTimeout(() => (els.toast.hidden = true), 1800);
   }
 
   async function start() {
@@ -404,19 +632,22 @@
     if (granted) {
       window.addEventListener("deviceorientation", onOrientation, true);
     } else {
-      els.permHint.textContent = "センサーが許可されませんでした。タッチ操作は使えません。";
+      els.permHint.textContent = "センサーが許可されませんでした。パッドを指で操作できます。";
     }
+
+    // motion (shake -> boing); separate permission on iOS
+    if (await requestMotionPermission()) {
+      window.addEventListener("devicemotion", onMotion, true);
+    }
+
+    tryFullscreen(); // Android: hide nav bar
 
     els.overlay.classList.add("hidden");
     els.app.hidden = false;
 
-    // fallback for devices without orientation: let user drag the pad
     enablePadDrag();
-
-    // auto-start sound
     play();
 
-    // hint if no orientation data soon
     setTimeout(() => {
       if (!state.haveOrientation) {
         showToast("傾きセンサーが無い端末はパッドを指でドラッグ");
@@ -424,20 +655,18 @@
     }, 1500);
   }
 
-  // Pointer fallback: drag on the pad to set tilt (useful on desktop / no-sensor)
   function enablePadDrag() {
     let dragging = false;
     const setFromPointer = (clientX, clientY) => {
       const r = els.pad.getBoundingClientRect();
-      const nx = (clientX - r.left) / r.width;  // 0..1
-      const ny = (clientY - r.top) / r.height;  // 0..1
-      // invert the pad-dot mapping (see updatePadDot)
+      const nx = (clientX - r.left) / r.width;
+      const ny = (clientY - r.top) / r.height;
       state.tiltX = ((nx * 2 - 1) * 8) / state.sensitivity;
       state.tiltY = ((1 - ny * 2) * 45) / state.sensitivity;
       updateFrequency(false);
     };
     const down = (e) => {
-      if (state.haveOrientation) return; // sensor takes priority
+      if (state.haveOrientation) return;
       dragging = true;
       const p = e.touches ? e.touches[0] : e;
       setFromPointer(p.clientX, p.clientY);
@@ -457,10 +686,13 @@
   // ---------- Boot ----------
   function init() {
     cacheEls();
+    loadSettings();
+    buildModePicker();
     buildVoicePicker();
     bindControls();
     syncControlLabels();
-    els.startBtn.addEventListener("click", start, { once: false });
+    renderQR();
+    els.startBtn.addEventListener("click", start);
 
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {
