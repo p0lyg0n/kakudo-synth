@@ -1,5 +1,5 @@
 /* Service worker for Kakudo Synth — offline app shell caching. */
-const CACHE = "kakudo-synth-v3";
+const CACHE = "kakudo-synth-v4";
 const ASSETS = [
   "./",
   "./index.html",

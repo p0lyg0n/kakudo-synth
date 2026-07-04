@@ -54,10 +54,8 @@
     vibrato: 0,   // 0..100 -> vibrato depth
     shake: true,      // vibration -> boing jump sound
     shakeSens: 70,    // 0..100, higher = triggers on gentler shakes
-    centerBeta: null,
-    centerGamma: null,
-    tiltX: 0, // gamma
-    tiltY: 0, // beta
+    tiltX: 0, // left/right (roll), relative to calibrated center
+    tiltY: 0, // front/back (pitch), relative to calibrated center
     haveOrientation: false,
   };
 
@@ -366,10 +364,11 @@
   }
 
   function onMotion(e) {
-    if (!state.shake) return;
     const a = e.accelerationIncludingGravity || e.acceleration;
     if (!a || a.x == null) return;
-    if (lastAcc) {
+
+    // --- shake -> boing (only when enabled) ---
+    if (state.shake && lastAcc) {
       const d = Math.hypot(a.x - lastAcc.x, a.y - lastAcc.y, a.z - lastAcc.z);
       const t = (typeof performance !== "undefined" ? performance.now() : Date.now());
       if (d > shakeThreshold() && t - lastShakeTime > SHAKE_COOLDOWN) {
@@ -378,6 +377,20 @@
       }
     }
     lastAcc = { x: a.x, y: a.y, z: a.z };
+
+    // --- tilt from gravity (works face-up or face-down; X axis responds) ---
+    if (e.accelerationIncludingGravity && e.accelerationIncludingGravity.x != null) {
+      const g = e.accelerationIncludingGravity;
+      if (!gravity) gravity = { x: g.x, y: g.y, z: g.z };
+      const k = 0.8; // low-pass to isolate gravity from motion
+      gravity.x = k * gravity.x + (1 - k) * g.x;
+      gravity.y = k * gravity.y + (1 - k) * g.y;
+      gravity.z = k * gravity.z + (1 - k) * g.z;
+      const [tx, ty] = tiltFromGravity(gravity.x, gravity.y, gravity.z);
+      usingMotionTilt = true;
+      state.haveOrientation = true;
+      applyTilt(tx, ty);
+    }
   }
 
   async function requestMotionPermission() {
@@ -389,29 +402,52 @@
     return true;
   }
 
-  // ---------- Orientation ----------
-  function onOrientation(e) {
-    if (e.beta === null || e.gamma === null) return;
-    state.haveOrientation = true;
-    if (state.centerBeta === null) {
-      state.centerBeta = e.beta;
-      state.centerGamma = e.gamma;
-    }
-    let dBeta = e.beta - state.centerBeta;
-    let dGamma = e.gamma - state.centerGamma;
-    if (dBeta > 180) dBeta -= 360;
-    if (dBeta < -180) dBeta += 360;
-    state.tiltX = dGamma;
-    state.tiltY = dBeta;
+  // ---------- Tilt sensing ----------
+  // Tilt is derived from the GRAVITY vector (via devicemotion), not the Euler
+  // angles from deviceorientation. Euler gamma (left/right) becomes unreliable
+  // when the phone is face-down, which is exactly how this app is held — that is
+  // why the X axis "didn't work". Gravity components are well-defined in any
+  // orientation, and because a flat phone reads ~0 on both X and Y whether it is
+  // face-up or face-down, calibrating face-up and then flipping face-down keeps
+  // the same center. deviceorientation is only used as a fallback.
+  let gravity = null;              // low-pass filtered gravity vector
+  let usingMotionTilt = false;     // true once devicemotion drives the tilt
+  let rawTX = 0, rawTY = 0;        // current raw tilt (deg) before calibration
+  let centerTX = null, centerTY = null; // calibration offsets (session only)
+
+  function applyTilt(rawX, rawY) {
+    rawTX = rawX;
+    rawTY = rawY;
+    if (centerTX === null) { centerTX = rawX; centerTY = rawY; }
+    state.tiltX = rawX - centerTX;
+    state.tiltY = rawY - centerTY;
     updateFrequency(false);
   }
 
+  // Gravity -> roll (X, left/right) and pitch (Y, front/back), in degrees.
+  function tiltFromGravity(gx, gy, gz) {
+    const rad = 180 / Math.PI;
+    const tx = Math.atan2(gx, Math.hypot(gy, gz)) * rad; // left/right
+    const ty = Math.atan2(gy, Math.hypot(gx, gz)) * rad; // front/back
+    return [tx, ty];
+  }
+
+  // Fallback only (used when devicemotion gravity is unavailable).
+  function onOrientation(e) {
+    if (usingMotionTilt) return;
+    if (e.beta === null || e.gamma === null) return;
+    state.haveOrientation = true;
+    applyTilt(e.gamma, e.beta);
+  }
+
   function calibrate() {
-    state.centerBeta = null;
-    state.centerGamma = null;
+    // Make the current posture the neutral center.
+    centerTX = rawTX;
+    centerTY = rawTY;
     state.tiltX = 0;
     state.tiltY = 0;
     updatePadDot();
+    updateFrequency(false);
     showToast("中央にセットしました");
   }
 
