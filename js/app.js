@@ -379,13 +379,14 @@
   let lastShakeTime = 0;
   const SHAKE_COOLDOWN = 260;   // ms between boings
 
-  // hold-to-play (stillness) detection
+  // hold-to-play (stillness) detection — adaptive to each device's noise floor
   let activityEMA = 0;          // smoothed jerk (hand tremor vs dead-still table)
-  let lastMoveTime = 0;         // last time real motion was seen
+  let restFloor = 0;            // learned baseline noise while at rest
+  let lastMoveTime = 0;         // last time motion above the floor was seen
   let holdSuppressed = false;   // after a manual stop, don't auto-restart until set down
-  const HOLD_NOISE = 0.12;      // jerk below this counts as "still" (sensor noise)
-  const HOLD_MOVE = 0.30;       // smoothed activity above this = clearly in hand
-  const HOLD_STILL_MS = 1600;   // must be still this long before auto-stopping
+  const HOLD_STILL = 0.05;      // activity-over-floor below this = still
+  const HOLD_MOVE = 0.30;       // activity-over-floor above this = clearly in hand
+  const HOLD_STILL_MS = 1300;   // must be still this long before auto-stopping
 
   function nowMs() {
     return (typeof performance !== "undefined" ? performance.now() : Date.now());
@@ -414,13 +415,19 @@
 
     // --- hold-to-play: start when moving, stop when set down (still) ---
     if (state.autoHold) {
-      activityEMA = activityEMA * 0.88 + jerk * 0.12;
-      if (jerk > HOLD_NOISE) lastMoveTime = t;
+      activityEMA = activityEMA * 0.85 + jerk * 0.15;
+      // Track the noise floor: ease down toward lows (so brief pauses of a steady
+      // hand aren't "resting"), and climb up toward a raised floor (e.g. speaker
+      // vibration on a hard surface) fast enough to still detect stillness.
+      if (activityEMA < restFloor) restFloor += (activityEMA - restFloor) * 0.05;
+      else restFloor += 0.002;
+      const over = activityEMA - restFloor; // activity above the resting noise
+      if (over > HOLD_STILL) lastMoveTime = t;
       const still = (t - lastMoveTime > HOLD_STILL_MS);
       if (still) holdSuppressed = false;          // set down -> re-arm auto start
       if (!state.running) {
-        if (!holdSuppressed && activityEMA > HOLD_MOVE) play(); // picked up / moving
-      } else if (still && activityEMA < HOLD_NOISE) {
+        if (!holdSuppressed && over > HOLD_MOVE) play(); // picked up / moving
+      } else if (still) {
         stop();                                    // resting on a surface
       }
     }
@@ -624,11 +631,21 @@
   }
 
   function updatePadDot() {
-    // pad position always reflects raw tilt direction (works for both modes)
-    let px = ((state.tiltX * state.sensitivity) / 8);
-    px = Math.max(-1, Math.min(1, px));
-    let py = ((state.tiltY * state.sensitivity) / 45);
-    py = Math.max(-1, Math.min(1, py));
+    // The dot must reach the pad edge exactly when the sound reaches its limit,
+    // so the mapping mirrors currentFreq()/currentCutoff() per mode.
+    let px, py; // -1..1, then scaled by 48% of the pad
+    if (state.mode === "center") {
+      // pitch saturates when semis == rangeSemis, i.e. d == 6*rangeSemis/sens
+      const d = tiltDistance();
+      const rMax = (6 * state.rangeSemis) / state.sensitivity;
+      const r = rMax > 0 ? Math.min(1, d / rMax) : 0;
+      if (d > 1e-4) { px = (state.tiltX / d) * r; py = (state.tiltY / d) * r; }
+      else { px = 0; py = 0; }
+    } else {
+      // axis mode: X drives pitch (÷8), Y drives brightness (÷45) — matches sound
+      px = Math.max(-1, Math.min(1, (state.tiltX * state.sensitivity) / 8));
+      py = Math.max(-1, Math.min(1, (state.tiltY * state.sensitivity) / 45));
+    }
     els.padDot.style.left = (50 + px * 48) + "%";
     els.padDot.style.top = (50 - py * 48) + "%";
   }
