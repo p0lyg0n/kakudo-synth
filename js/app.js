@@ -38,6 +38,10 @@
   const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
   const BASE_FREQ = 220; // A3 as the center pitch
 
+  // Center mode: degrees of tilt (times sensitivity) per semitone of pitch.
+  // Smaller = the pitch reaches its range with a shallower tilt (more responsive).
+  const CENTER_K = 2.2;
+
   // ---------- State ----------
   const state = {
     running: false,
@@ -229,7 +233,7 @@
     if (state.mode === "center") {
       // distance from center -> upward pitch only
       const d = tiltDistance();
-      semis = (d * state.sensitivity) / 6; // deg -> semis
+      semis = (d * state.sensitivity) / CENTER_K; // deg -> semis
       semis = Math.max(0, Math.min(state.rangeSemis, semis));
     } else {
       const half = state.rangeSemis / 2;
@@ -257,10 +261,10 @@
   function currentCutoff() {
     let norm;
     if (state.mode === "center") {
-      // Brightness follows the DISTANCE from center, so left/right and
-      // front/back have an identical effect (symmetric — no weak axis).
+      // Brightness follows the DISTANCE from center (same tilt range as pitch),
+      // so left/right and front/back have an identical effect (no weak axis).
       const d = tiltDistance();
-      norm = Math.min(1, (d * state.sensitivity) / 55);
+      norm = Math.min(1, (d * state.sensitivity) / (CENTER_K * state.rangeSemis));
     } else {
       // Axis mode: front/back tilt controls brightness.
       let by = (state.tiltY * state.sensitivity) / 45;
@@ -656,9 +660,9 @@
     // so the mapping mirrors currentFreq()/currentCutoff() per mode.
     let px, py; // -1..1, then scaled by 48% of the pad
     if (state.mode === "center") {
-      // pitch saturates when semis == rangeSemis, i.e. d == 6*rangeSemis/sens
+      // pitch saturates when semis == rangeSemis, i.e. d == CENTER_K*rangeSemis/sens
       const d = tiltDistance();
-      const rMax = (6 * state.rangeSemis) / state.sensitivity;
+      const rMax = (CENTER_K * state.rangeSemis) / state.sensitivity;
       const r = rMax > 0 ? Math.min(1, d / rMax) : 0;
       if (d > 1e-4) { px = (state.tiltX / d) * r; py = (state.tiltY / d) * r; }
       else { px = 0; py = 0; }
